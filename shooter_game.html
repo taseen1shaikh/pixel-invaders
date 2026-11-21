@@ -1,0 +1,303 @@
+<title>Pixel Invaders</title>
+<style>
+  :root{
+    --bg:#0a0a12; --fg:#e8f8f0; --accent:#4ef08a; --accent2:#ff5d7a; --dim:#8a9aa0;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: radial-gradient(ellipse at top, #14141f 0%, #06060a 70%);
+    color: var(--fg);
+    display:flex; flex-direction:column; align-items:center;
+    margin:0; padding:24px 16px 48px;
+    font-family: 'Courier New', monospace;
+    min-height:100vh;
+  }
+  h1 {
+    letter-spacing: 4px; font-size: 1.4rem; margin: 0 0 4px;
+    color: var(--accent); text-shadow: 0 0 12px rgba(78,240,138,.5);
+  }
+  .sub { color: var(--dim); font-size: .8rem; margin-bottom: 16px; text-align:center; }
+  #wrap { position: relative; max-width: 100%; }
+  canvas {
+    background:#000; border:2px solid var(--accent);
+    box-shadow: 0 0 24px rgba(78,240,138,.25);
+    max-width: 94vw; height: auto; display:block;
+  }
+  #hud {
+    display:flex; justify-content:space-between; width:100%;
+    max-width: 480px; margin-bottom: 8px; font-size: .95rem;
+  }
+  #hud span.lbl { color: var(--dim); margin-right: 6px; }
+  #overlay {
+    position:absolute; inset:0; display:none; flex-direction:column;
+    align-items:center; justify-content:center; background:rgba(0,0,0,.8);
+    text-align:center; padding:20px;
+  }
+  #overlay.show { display:flex; }
+  #overlay h2 { color: var(--accent2); letter-spacing:2px; margin-bottom:6px; }
+  #overlay p { color:#ccc; margin: 4px 0 16px; font-size:.85rem; }
+  button {
+    font-family: inherit; background: var(--accent); color:#06160d; border:none;
+    padding: 10px 20px; font-weight:bold; letter-spacing:1px; cursor:pointer;
+    border-radius: 4px;
+  }
+  button:active { transform: scale(0.97); }
+  #touch {
+    display:none; gap:12px; margin-top:14px; width:100%; max-width:480px; justify-content:space-between;
+  }
+  #touch button.ctrl {
+    flex:1; padding:16px; font-size:1.2rem; background:#1a1a24; color: var(--accent);
+    border:1px solid var(--accent); user-select:none;
+  }
+  @media (pointer: coarse) {
+    #touch { display:flex; }
+  }
+  footer { margin-top: 18px; color: var(--dim); font-size: .72rem; text-align:center; }
+</style>
+
+<h1>PIXEL INVADERS</h1>
+<div class="sub">Arrow keys / A·D to move · Space to shoot · or use the buttons below</div>
+
+<div id="hud">
+  <div><span class="lbl">SCORE</span><span id="score">0</span></div>
+  <div><span class="lbl">WAVE</span><span id="wave">1</span></div>
+  <div><span class="lbl">LIVES</span><span id="lives">3</span></div>
+</div>
+
+<div id="wrap">
+  <canvas id="game" width="480" height="640"></canvas>
+  <div id="overlay">
+    <h2 id="overTitle">GAME OVER</h2>
+    <p id="overSub">Final score: 0</p>
+    <button id="restartBtn">PLAY AGAIN</button>
+  </div>
+</div>
+
+<div id="touch">
+  <button class="ctrl" id="btnLeft">◀</button>
+  <button class="ctrl" id="btnShoot">●</button>
+  <button class="ctrl" id="btnRight">▶</button>
+</div>
+
+<footer>Your own Pixel Invaders — remix it anytime</footer>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+const scoreEl = document.getElementById('score');
+const livesEl = document.getElementById('lives');
+const waveEl = document.getElementById('wave');
+const overlay = document.getElementById('overlay');
+const overTitle = document.getElementById('overTitle');
+const overSub = document.getElementById('overSub');
+
+const player = { x: W/2 - 20, y: H - 60, width: 40, height: 24, speed: 6 };
+
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (e.key === ' ') e.preventDefault();
+});
+window.addEventListener('keyup', e => keys[e.key] = false);
+
+function bindHold(el, key) {
+  const on = (e) => { e.preventDefault(); keys[key] = true; };
+  const off = (e) => { keys[key] = false; };
+  el.addEventListener('touchstart', on, {passive:false});
+  el.addEventListener('touchend', off);
+  el.addEventListener('mousedown', on);
+  el.addEventListener('mouseup', off);
+  el.addEventListener('mouseleave', off);
+}
+bindHold(document.getElementById('btnLeft'), 'ArrowLeft');
+bindHold(document.getElementById('btnRight'), 'ArrowRight');
+bindHold(document.getElementById('btnShoot'), ' ');
+
+let bullets = [];
+let enemyBullets = [];
+const BULLET_SPEED = 9;
+const BULLET_COOLDOWN = 14;
+let shootTimer = 0;
+
+const ENEMY_ROWS = 4, ENEMY_COLS = 8;
+const ENEMY_W = 32, ENEMY_H = 22, ENEMY_GAP = 14;
+let enemies = [];
+let enemyDir = 1;
+let enemySpeed = 0.6;
+let wave = 1;
+
+function spawnWave() {
+  enemies = [];
+  const totalW = ENEMY_COLS * (ENEMY_W + ENEMY_GAP) - ENEMY_GAP;
+  const startX = (W - totalW) / 2;
+  for (let r = 0; r < ENEMY_ROWS; r++) {
+    for (let c = 0; c < ENEMY_COLS; c++) {
+      enemies.push({
+        x: startX + c * (ENEMY_W + ENEMY_GAP),
+        y: 50 + r * (ENEMY_H + ENEMY_GAP),
+        width: ENEMY_W, height: ENEMY_H,
+        alive: true,
+        row: r
+      });
+    }
+  }
+  enemySpeed = 0.6 + (wave - 1) * 0.25;
+  enemyDir = 1;
+}
+
+let score = 0;
+let lives = 3;
+let gameOver = false;
+let frame = 0;
+
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.width && a.x + a.width > b.x &&
+         a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+function resetGame() {
+  score = 0; lives = 3; wave = 1; gameOver = false;
+  scoreEl.textContent = score; livesEl.textContent = lives; waveEl.textContent = wave;
+  bullets = []; enemyBullets = [];
+  player.x = W/2 - 20;
+  spawnWave();
+  overlay.classList.remove('show');
+}
+
+function endGame(title, sub) {
+  gameOver = true;
+  overTitle.textContent = title;
+  overSub.textContent = sub;
+  overlay.classList.add('show');
+}
+
+function update() {
+  if (gameOver) return;
+  frame++;
+
+  if ((keys['ArrowLeft'] || keys['a']) && player.x > 0) player.x -= player.speed;
+  if ((keys['ArrowRight'] || keys['d']) && player.x < W - player.width) player.x += player.speed;
+
+  if (shootTimer > 0) shootTimer--;
+  if (keys[' '] && shootTimer === 0) {
+    bullets.push({ x: player.x + player.width/2 - 2, y: player.y, width: 4, height: 12 });
+    shootTimer = BULLET_COOLDOWN;
+  }
+  bullets.forEach(b => b.y -= BULLET_SPEED);
+  bullets = bullets.filter(b => b.y > -20);
+
+  let hitEdge = false;
+  enemies.forEach(en => {
+    if (!en.alive) return;
+    en.x += enemySpeed * enemyDir;
+    if (en.x <= 0 || en.x + en.width >= W) hitEdge = true;
+  });
+  if (hitEdge) {
+    enemyDir *= -1;
+    enemies.forEach(en => { if (en.alive) en.y += 16; });
+  }
+
+  if (frame % 40 === 0) {
+    const shooters = enemies.filter(e => e.alive);
+    if (shooters.length) {
+      const shooter = shooters[Math.floor(Math.random() * shooters.length)];
+      enemyBullets.push({ x: shooter.x + shooter.width/2 - 2, y: shooter.y + shooter.height, width: 4, height: 12 });
+    }
+  }
+  enemyBullets.forEach(b => b.y += 5);
+  enemyBullets = enemyBullets.filter(b => b.y < H + 20);
+
+  bullets.forEach(b => {
+    enemies.forEach(en => {
+      if (en.alive && rectsOverlap(b, en)) {
+        en.alive = false;
+        b.y = -9999;
+        score += 10;
+        scoreEl.textContent = score;
+      }
+    });
+  });
+  bullets = bullets.filter(b => b.y > -999);
+
+  enemyBullets.forEach(b => {
+    if (rectsOverlap(b, player)) {
+      b.y = H + 999;
+      loseLife();
+    }
+  });
+  enemyBullets = enemyBullets.filter(b => b.y < H + 900);
+
+  enemies.forEach(en => {
+    if (en.alive && en.y + en.height >= player.y) {
+      loseLife();
+      en.alive = false;
+    }
+  });
+
+  if (!gameOver && enemies.every(en => !en.alive)) {
+    wave++;
+    waveEl.textContent = wave;
+    spawnWave();
+  }
+}
+
+function loseLife() {
+  if (gameOver) return;
+  lives--;
+  livesEl.textContent = Math.max(lives, 0);
+  if (lives <= 0) {
+    endGame('GAME OVER', 'Final score: ' + score);
+  }
+}
+
+function drawPlayer() {
+  ctx.fillStyle = '#4ef08a';
+  ctx.beginPath();
+  ctx.moveTo(player.x + player.width/2, player.y);
+  ctx.lineTo(player.x, player.y + player.height);
+  ctx.lineTo(player.x + player.width, player.y + player.height);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawEnemies() {
+  const colors = ['#ff5d7a', '#ffb24e', '#4ec9f0', '#c04ef0'];
+  enemies.forEach(en => {
+    if (!en.alive) return;
+    ctx.fillStyle = colors[en.row % colors.length];
+    ctx.fillRect(en.x, en.y, en.width, en.height);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(en.x + 6, en.y + 7, 5, 5);
+    ctx.fillRect(en.x + en.width - 11, en.y + 7, 5, 5);
+  });
+}
+
+function drawBullets() {
+  ctx.fillStyle = '#ffe34e';
+  bullets.forEach(b => ctx.fillRect(b.x, b.y, b.width, b.height));
+  ctx.fillStyle = '#ff5d7a';
+  enemyBullets.forEach(b => ctx.fillRect(b.x, b.y, b.width, b.height));
+}
+
+function draw() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  drawPlayer();
+  drawEnemies();
+  drawBullets();
+}
+
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+document.getElementById('restartBtn').addEventListener('click', resetGame);
+
+spawnWave();
+gameLoop();
+</script>
